@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "xiuxian-tg-bot"
+version = "0.1.0"
+description = ""
+authors = ["0x77"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+supabase = "^2.0.3"
+httpx = "^0.26.0"
+httpcore = "^1.0.2"
+python-telegram-bot = "^20.8"
+websockets = "^12.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
