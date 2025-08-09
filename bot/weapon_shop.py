@@ -289,11 +289,18 @@ class WeaponShop:
         weapon = self.weapons.get(weapon_name)
         return weapon["price"] if weapon else 0
 
-    def list_available_weapons(self, player_realm: str) -> List[Dict]:
+    def list_available_weapons(self, player_realm: str, player_spirit_stones: int = None) -> List[Dict]:
         """获取可用武器列表"""
         available_weapons = []
         for name, weapon in self.weapons.items():
             can_buy = self.REALMS.index(player_realm) >= self.REALMS.index(weapon["required_realm"])
+            
+            # 如果提供了灵石数量，只显示买得起的武器
+            if player_spirit_stones is not None:
+                can_afford = player_spirit_stones >= weapon["price"]
+                if not (can_buy and can_afford):
+                    continue
+            
             weapon_info = weapon.copy()
             weapon_info["name"] = name
             weapon_info["can_buy"] = can_buy

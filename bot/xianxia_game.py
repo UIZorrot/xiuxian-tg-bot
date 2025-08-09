@@ -1133,20 +1133,28 @@ class XianXiaGame:
         """列出可购买的武器"""
         try:
             player = await self.get_or_create_player(user_id, username, screen_name)
-            available_weapons = self.weapon_shop.list_available_weapons(player.realm)
             
-            weapon_list = ["铁匠铺可出售的武器: \n"]
+            # 获取玩家的灵石数量
+            materials = player.items.get("materials", {})
+            spirit_stones = materials.get('灵石', 0)
             
-            for weapon in available_weapons:
-                status = "✅" if weapon["can_buy"] else "❌"
-                weapon_list.append(
-                    f"{status} {weapon['name']}\n"
-                    f"   品质: {weapon['rarity']}\n"
-                    f"   攻击力: {weapon['attack']}\n"
-                    f"   价格: {weapon['price']} 灵石\n"
-                    f"   需求境界: {weapon['required_realm']}\n"
-                    f"   描述: {weapon['description']}\n"
-                )
+            # 只显示买得起的武器
+            available_weapons = self.weapon_shop.list_available_weapons(player.realm, spirit_stones)
+            
+            weapon_list = [f"铁匠铺可出售的武器 (你的灵石: {spirit_stones}): \n"]
+            
+            if not available_weapons:
+                weapon_list.append("暂无你能买得起的武器，努力修炼赚取灵石吧！")
+            else:
+                for weapon in available_weapons:
+                    weapon_list.append(
+                        f"✅ {weapon['name']}\n"
+                        f"   品质: {weapon['rarity']}\n"
+                        f"   攻击力: {weapon['attack']}\n"
+                        f"   价格: {weapon['price']} 灵石\n"
+                        f"   需求境界: {weapon['required_realm']}\n"
+                        f"   描述: {weapon['description']}\n"
+                    )
 
             return "\n".join(weapon_list)
 
@@ -1299,17 +1307,39 @@ class XianXiaGame:
         user_id: int,
         username: str,
         screen_name: str,
-        stage_name: str,
-        chat_id: int,
+        stage_name: str = None,
+        chat_id: int = None,
         message_thread_id: Optional[int] = None
     ) -> str:
         """挑战爱思唯尔秘境"""
         try:
-            if not self.check_channel_permission(chat_id, message_thread_id):
+            if chat_id and not self.check_channel_permission(chat_id, message_thread_id):
                 return self.format_error_message(chat_id)
 
             # 获取玩家数据
             player = await self.get_or_create_player(user_id, username, screen_name)
+            
+            # 如果没有指定副本名称，显示所有可用副本
+            if not stage_name or stage_name.strip() == "":
+                stage_list = ["🏛️ 爱思唯尔秘境 - 可用副本：\n"]
+                
+                for name, stage_info in self.elsevier_dungeon["stages"].items():
+                    can_challenge = self.check_realm_requirement(player.realm, stage_info["min_realm"])
+                    status = "✅" if can_challenge else "❌"
+                    
+                    # 获取副本类型描述
+                    stage_type = "Boss战" if "boss" in stage_info else "普通副本"
+                    
+                    stage_list.append(
+                        f"{status} {name}\n"
+                        f"   需求境界: {stage_info['min_realm']}\n"
+                        f"   消耗灵力: {stage_info['spirit_cost']}\n"
+                        f"   类型: {stage_type}\n"
+                    )
+                
+                stage_list.append("\n使用方法：/elsevier 副本名称")
+                return "\n".join(stage_list)
+            
             now = datetime.now(timezone.utc)
 
             # 检查冷却时间
@@ -1494,7 +1524,7 @@ class XianXiaGame:
                 shop_msg.append(f"• {item} - {info['price']}灵石")
                 shop_msg.append(f"  {info['description']}")
             
-            shop_msg.append("\n使用方法：/buy <物品名称>")
+            shop_msg.append("\n使用方法：/buy 物品名称")
             
             return "\n".join(shop_msg)
             

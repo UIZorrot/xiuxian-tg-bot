@@ -336,11 +336,8 @@ async def elsevier_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         # 获取副本名称参数
         args = context.args
-        if not args:
-            await message.reply_text("请指定要挑战的副本，例如：/elsevier 初级副本")
-            return
-            
-        stage_name = " ".join(args)
+        stage_name = " ".join(args) if args else None
+        
         result = await xianxia_game.challenge_elsevier(
             user_id=user.id,
             username=username,
