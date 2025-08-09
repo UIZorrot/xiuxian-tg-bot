@@ -5,158 +5,50 @@ from typing import Dict
 import requests
 import time
 
-from supabase import create_client, Client
-from realtime import AsyncRealtimeClient, RealtimeSubscribeStates
-from telebot.storage import StateMemoryStorage
-from telebot.async_telebot import AsyncTeleBot
-from websockets.exceptions import ConnectionClosedError
-from asyncio import CancelledError
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.constants import ParseMode
 
-from .weapon_enhancement import WeaponEnhancement
-from .xianxia_game import XianXiaGame
+# 导入新的配置和数据库模块
+import sys
+sys.path.append('..')
+from config import (
+    TELEGRAM_BOT_TOKEN, GAME_CHANNELS, ALLOWED_CHANNELS, 
+    ALLOWED_ANN, WITHDRAW_ANN, LOG_LEVEL, LOG_FORMAT
+)
+from database import init_db
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from bot.weapon_enhancement import WeaponEnhancement
+from bot.xianxia_game import XianXiaGame
+
+# 配置日志
+logging.basicConfig(level=getattr(logging, LOG_LEVEL), format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
-# 配置参数
-url: str = os.getenv("SUPABASE_URL")
-key: str = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(url, key)
 
-
-# Realtime 配置
-SUPABASE_ID: str = os.getenv("SUPABASE_ID")
-API_KEY: str = os.getenv("SUPABASE_API_KEY")
-URL: str = f"wss://{SUPABASE_ID}.supabase.co/realtime/v1/websocket"
-
-# Telegram 配置
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALLOWED_CHAT_IDS = os.getenv("ALLOWED_CHAT_IDS")
-
-ALLOWED_CHANNELS = {
-    -1002309536226: [17356]
-}
-
-GAME_CHANNELS = {
-    -1002309536226: [716031]
-}
-
-ALLOWED_ANN = {
-    -1002309536226: [1]
-}
-WITHDRAW_ANN = {
-    -1002309536226: [1, 141108]
-}
-
-
-xianxia_game = XianXiaGame(supabase, GAME_CHANNELS)
+# 初始化游戏组件（数据库将在main函数中初始化）
+xianxia_game = None
 weapon_enhancement = WeaponEnhancement()
 
-state_storage = StateMemoryStorage()
-bot = AsyncTeleBot(
-    token=BOT_TOKEN,
-    parse_mode="HTML"
-)
+# 创建Application实例
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-class RealtimeManager:
-    def __init__(self):
-        self.realtime_client = None
-        self.channel = None
-        self.is_running = True
-        self.reconnect_delay = 1
-        self.max_reconnect_delay = 60
-
-    async def connect(self):
-        while self.is_running:
-            try:
-                self.realtime_client = AsyncRealtimeClient(URL, API_KEY)
-                await self.realtime_client.connect()
-                self.channel = self.realtime_client.channel("realtime:public:monitored_tweets")
-                
-                self.reconnect_delay = 1
-                await self.subscribe_to_changes()
-                await self.realtime_client.listen()
-                
-            except (ConnectionClosedError, CancelledError) as e:
-                logger.error(f"WebSocket 连接断开: {e}")
-                if self.realtime_client:
-                    await self.realtime_client.disconnect()
-                await asyncio.sleep(self.reconnect_delay)
-                self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
-            except Exception as e:
-                logger.error(f"发生未预期的错误: {e}", exc_info=True)
-                await asyncio.sleep(self.reconnect_delay)
-
-    async def subscribe_to_changes(self):
-        def on_subscribe(status: RealtimeSubscribeStates, err: Exception):
-            if status == RealtimeSubscribeStates.SUBSCRIBED:
-                logger.info("成功订阅数据库更改")
-            elif err:
-                logger.error(f"订阅失败: {err}")
-
-        async def handle_database_changes(payload):
-            try:
-                record = payload['data']['record']
-                formatted_message = format_tweet_message(record)
-                for chat_id in ALLOWED_CHAT_IDS:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=formatted_message,
-                        parse_mode="HTML"
-                    )
-                logger.info("已发送 Telegram 消息")
-            except (KeyError, TypeError) as e:
-                logger.error(f"处理 payload 时出错: {e}, payload: {payload}")
-
-        await self.channel.on_postgres_changes(
-            "*",
-            callback=handle_database_changes
-        ).subscribe(on_subscribe)
-
-def format_tweet_message(tweet_data: dict) -> str:
-    tags = ", ".join(tweet_data.get('tags', [])) or "无标签"
-    message = f"""
-<b>===============</b>
-<b>🚀 新推文来了!</b>
-
-👤 <b>{tweet_data['username']}</b> (<i>@{tweet_data['screen_name']}</i>)
-🗨️ <b>推文内容:</b>
-{tweet_data['tweet']}
-
-❤️ <b>点赞:</b> {tweet_data['favorite_count']} | 🔁 <b>转发:</b> {tweet_data['retweet_count']}
-🔗 <a href="https://twitter.com/{tweet_data['username']}/status/{tweet_data['tweet_id']}">查看推文</a>
-🏷️ <code>标签: {tags}</code>
-"""
-    return message
+# Realtime功能已移除，使用SQLite本地数据库
 
 
 
 async def send_announcement():
-    """定期发送公告"""
+    """定期发送公告（暂时禁用，可根据需要重新实现）"""
+    # 公告功能暂时禁用，因为不再使用Supabase
+    # 如果需要公告功能，可以在SQLite中创建announcements表
+    logger.info("公告功能已禁用")
     while True:
-        try:
-            # 发送公告到指定的群组和主题
-            for chat_id, thread_ids in ALLOWED_ANN.items():
-                for thread_id in thread_ids:
-                    with open('./tgbot/videos/scam.mp4', 'rb') as video:
-                        await bot.send_video(
-                            chat_id=chat_id,
-                            video=video,
-                            caption="防骗公告",
-                            reply_to_message_id=thread_id,
-                            duration=4, 
-                            width=1280,    
-                            height=720,  
-                            supports_streaming=True 
-                        )
-            await asyncio.sleep(4600)
-        except Exception as e:
-            logger.error(f"发送公告失败: {e}")
+        await asyncio.sleep(3600)  # 保持任务运行但不执行任何操作
 
 
-@bot.message_handler(commands=['start'])
-async def start_handler(message):
-    await bot.reply_to(message, "Welcome to Scihub!!!")
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """处理/start命令"""
+    await update.message.reply_text("欢迎使用修仙机器人！\n\n发送 /xiuxian 开始你的修仙之旅！", parse_mode=ParseMode.HTML)
 
 
 @bot.message_handler(commands=['xiuxian'])
@@ -748,32 +640,59 @@ async def main():
     logger.info("启动机器人...")
     
     try:
-        realtime_manager = RealtimeManager()
+        # 初始化数据库
+        await init_db()
+        
+        # 初始化游戏组件
+        global xianxia_game
+        xianxia_game = XianXiaGame()
         
         tasks = [
-            asyncio.create_task(realtime_manager.connect()),
             asyncio.create_task(start_bot()),
-            asyncio.create_task(send_announcement()),
+            # asyncio.create_task(send_announcement()),  # 暂时禁用公告功能
         ]
         
         await asyncio.gather(*tasks)
         
     except Exception as e:
         logger.error(f"主程序发生错误: {e}", exc_info=True)
-        await realtime_manager.stop()
         raise
 
 async def start_bot():
     """启动机器人"""
-    try:
-        # 删除 Webhook
-        await bot.delete_webhook(drop_pending_updates=True)
-        
-        # 启动轮询
-        await bot.polling(non_stop=True, skip_pending=True, timeout=20)
-    except Exception as e:
-        logger.error(f"机器人运行错误: {e}", exc_info=True)
-        raise
+    max_retries = 3
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            # 尝试删除 Webhook，如果失败则跳过
+            try:
+                logger.info("正在删除webhook...")
+                await asyncio.wait_for(bot.delete_webhook(drop_pending_updates=True), timeout=10)
+                logger.info("Webhook删除成功")
+            except asyncio.TimeoutError:
+                logger.warning("删除webhook超时，跳过此步骤")
+            except Exception as e:
+                logger.warning(f"删除webhook失败，跳过此步骤: {e}")
+            
+            # 启动轮询，使用基本配置
+            logger.info("开始轮询消息...")
+            await bot.polling(
+                non_stop=True, 
+                skip_pending=True, 
+                timeout=20  # 基本超时时间
+            )
+            break  # 如果成功启动，跳出重试循环
+            
+        except Exception as e:
+            logger.error(f"机器人运行错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"等待 {retry_delay} 秒后重试...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # 指数退避
+            else:
+                logger.error("所有重试都失败，机器人无法启动")
+                raise
 
 if __name__ == "__main__":
     try:

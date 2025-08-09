@@ -2,18 +2,26 @@ from datetime import datetime, timezone
 import random
 from typing import Optional, Dict, List
 import logging
-from supabase import Client
-from .weapon_shop import WeaponShop
-from ..models.player_data import PlayerData
+from bot.weapon_shop import WeaponShop
+from models.player_data import PlayerData
+
+# 导入新的数据库模块
+import os
+import sys
+# 添加项目根目录到路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+from database import get_player, create_player, update_player, get_leaderboard
+from config import GAME_CHANNELS
 
 logger = logging.getLogger(__name__)
 
 
 class XianXiaGame:
-    def __init__(self, supabase_client: Client, allowed_channels: Dict[int, List[int]]):
-        self.supabase = supabase_client
+    def __init__(self, allowed_channels: Optional[Dict[int, List[int]]] = None):
         self.weapon_shop = WeaponShop()
-        self.allowed_channels = allowed_channels
+        self.allowed_channels = allowed_channels or GAME_CHANNELS
         self.logger = logging.getLogger(__name__)
 
         # 境界设置
@@ -393,14 +401,8 @@ class XianXiaGame:
         }
 
 
-        # 测试数据库连接
-        try:
-            self.logger.info("测试数据库连接...")
-            response = self.supabase.table('players').select("*").limit(1).execute()
-            self.logger.info("数据库连接成功")
-        except Exception as e:
-            self.logger.error(f"数据库连接失败: {e}", exc_info=True)
-            raise
+        # 数据库连接由database模块管理
+        self.logger.info("游戏系统初始化完成")
 
     # def get_or_create_player(self, user_id: int, username: str) -> PlayerData:
     #     """获取或创建玩家数据"""
@@ -485,24 +487,14 @@ class XianXiaGame:
         """异步获取或创建玩家数据，并处理灵力自动恢复"""
         try:
             self.logger.info(f"尝试获取玩家数据 - user_id: {user_id}, username: {username}")
-            username = username or "unkonw"
+            username = username or "unknown"
 
             # 查询现有玩家
-            response = self.supabase.table('players').select("*").eq('user_id', user_id).execute()
+            player_data = await get_player(user_id)
             
-            if response.data:
+            if player_data:
                 self.logger.info("找到现有玩家")
-                player_data = response.data[0]
-                if 'items' not in player_data:
-                    player_data['items'] = {
-                        "灵石": 0,
-                        "weapons": {},
-                        "materials": {}
-                    }
-                if 'max_hp' not in player_data:
-                    player_data['max_hp'] = 100
-
-                player = PlayerData.from_dict(player_data)
+                player = player_data
                             
                 # 处理灵力自动恢复
                 now = datetime.now(timezone.utc)
@@ -525,30 +517,19 @@ class XianXiaGame:
                         if new_spirit != player.spiritual_power:
                             player.spiritual_power = new_spirit
                             # 更新数据库
-                            update_data = player.to_dict()
-                            for field in ['user_id', 'created_at', 'updated_at']:
-                                update_data.pop(field, None)
-                            
-                            self.supabase.table('players').update(
-                                {"spiritual_power": new_spirit}
-                            ).eq('user_id', user_id).execute()
+                            await update_player(player)
                 
                 return player
             
             self.logger.info("未找到玩家，创建新玩家")
             new_player = PlayerData(user_id=user_id, username=username, screen_name=screen_name)
-            insert_data = new_player.to_dict()
             
-            # 移除时间戳字段
-            insert_data.pop('created_at', None)
-            insert_data.pop('updated_at', None)
-            
-            response = self.supabase.table('players').insert(insert_data).execute()
-            
-            if not response.data:
+            # 创建新玩家
+            created_player = await create_player(user_id, username, screen_name)
+            if not created_player:
                 raise Exception("创建玩家失败")
                 
-            return PlayerData(**response.data[0])
+            return created_player
                 
         except Exception as e:
             self.logger.error(f"获取/创建玩家数据错误: {e}", exc_info=True)
@@ -558,17 +539,13 @@ class XianXiaGame:
     async def update_player(self, player: PlayerData) -> PlayerData:
         """异步更新玩家数据"""
         try:
-            update_data = player.to_dict()
-            for field in ['user_id', 'created_at', 'updated_at']:
-                update_data.pop(field, None)
-                
-            self.logger.debug(f"准备更新数据: {update_data}")
-            response = self.supabase.table('players').update(update_data).eq('user_id', player.user_id).execute()
+            self.logger.debug(f"准备更新玩家数据: {player.user_id}")
+            updated_player = await update_player(player)
             
-            if not response.data:
+            if not updated_player:
                 raise Exception("更新玩家数据失败")
                 
-            return PlayerData(**response.data[0])
+            return updated_player
             
         except Exception as e:
             self.logger.error(f"更新玩家数据错误: {e}", exc_info=True)
@@ -1242,28 +1219,8 @@ class XianXiaGame:
     async def get_leaderboard(self) -> str:
         """获取排行榜前20名"""
         try:
-            # 获取所有玩家数据并按照境界和经验值排序
-            response = self.supabase.table('players').select('*').execute()
-
-            # 将境界转换为数值以便排序
-            realm_values = {
-                "练气期": 1,
-                "筑基期": 2,
-                "金丹期": 3,
-                "元婴期": 4,
-                "化神期": 5,
-                "炼虚期": 6,
-                "合体期": 7,
-                "大乘期": 8,
-                "渡劫期": 9
-            }
-
-            # 对玩家数据进行排序
-            players = sorted(
-                response.data,
-                key=lambda x: (realm_values.get(x.get('realm', "练气期"), 0), x.get('exp', 0)),
-                reverse=True
-            )[:20]  # 只取前20名
+            # 获取排行榜数据
+            players = await get_leaderboard(limit=20)
 
             # 构建排行榜文本
             leaderboard_text = "🏆 修仙界排行榜 TOP20 🏆\n\n"
@@ -1513,3 +1470,77 @@ class XianXiaGame:
                 "exp": 0,
                 "items": {}
             }
+
+    async def visit_shop(self, user_id: int, username: str, screen_name: str) -> str:
+        """访问杂货铺"""
+        try:
+            player = await self.get_or_create_player(user_id, username, screen_name)
+            
+            shop_items = {
+                "回血丹": {"price": 50, "description": "恢复100点生命值"},
+                "回气丹": {"price": 30, "description": "恢复50点法力值"},
+                "经验丹": {"price": 100, "description": "获得50点经验值"},
+                "灵石袋": {"price": 200, "description": "获得100灵石"}
+            }
+            
+            materials = player.items.get("materials", {})
+            spirit_stones = materials.get('灵石', 0)
+            
+            shop_msg = ["🏪 杂货铺"]
+            shop_msg.append(f"你的灵石：{spirit_stones}")
+            shop_msg.append("\n商品列表：")
+            
+            for item, info in shop_items.items():
+                shop_msg.append(f"• {item} - {info['price']}灵石")
+                shop_msg.append(f"  {info['description']}")
+            
+            shop_msg.append("\n使用方法：/buy <物品名称>")
+            
+            return "\n".join(shop_msg)
+            
+        except Exception as e:
+            logger.error(f"访问杂货铺失败: {e}")
+            return "杂货铺暂时关闭，请稍后再试。"
+
+    async def enhance_weapon(self, user_id: int, username: str, screen_name: str, weapon_name: str) -> str:
+        """强化武器"""
+        try:
+            from bot.weapon_enhancement import WeaponEnhancement
+            
+            player = await self.get_or_create_player(user_id, username, screen_name)
+            enhancement = WeaponEnhancement()
+            
+            result = await enhancement.enhance_weapon(player, self.update_player, weapon_name)
+            return result
+            
+        except Exception as e:
+            logger.error(f"强化武器失败: {e}")
+            return "强化过程出现异常，请稍后再试。"
+
+    async def check_weapon(self, user_id: int, username: str, screen_name: str) -> str:
+        """查看武器信息"""
+        try:
+            from bot.weapon_enhancement import WeaponEnhancement
+            
+            player = await self.get_or_create_player(user_id, username, screen_name)
+            enhancement = WeaponEnhancement()
+            
+            if 'weapons' not in player.items or not player.items['weapons']:
+                return "你还没有任何武器！"
+            
+            # 显示所有武器信息
+            weapon_info = ["🗡️ 你的武器："]
+            
+            for weapon_name, weapon in player.items['weapons'].items():
+                equipped_mark = "⚔️" if weapon_name == player.equipped_weapon else "📦"
+                weapon_info.append(f"{equipped_mark} {weapon_name}")
+                weapon_info.append(f"  攻击力：{weapon.attack}")
+                weapon_info.append(f"  强化等级：+{weapon.enhancement_level}")
+                weapon_info.append(f"  品质：{weapon.quality}")
+                weapon_info.append("")
+            
+            return "\n".join(weapon_info)
+            
+        except Exception as e:
+            logger.error(f"查看武器失败: {e}")
+            return "获取武器信息失败，请稍后再试。"

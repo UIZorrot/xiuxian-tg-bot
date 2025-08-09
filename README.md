@@ -121,7 +121,8 @@ cd xiuxian-tg-bot
 
 2. 安装依赖
 ```bash
-pip install -r requirements.txt
+poetry install
+poetry run python -m bot.bot
 ```
 
 3. 配置环境变量
